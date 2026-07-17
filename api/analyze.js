@@ -1,5 +1,40 @@
 // Vercel serverless function: POST /api/analyze  { text: string }
-// Keeps the OpenAI key on the server — never expose it in frontend code.
+// Keeps the API key on the server — never expose it in frontend code.
+
+function getFallbackAnalysis(text) {
+  const normalized = (text || "").toLowerCase();
+  let emotion = "neutral";
+  let intensity = 3;
+
+  if (/(sad|down|upset|hurt|lonely|cry|empty|depressed)/.test(normalized)) {
+    emotion = "sad";
+    intensity = 4;
+  } else if (/(anxious|worried|nervous|stress|panic|afraid)/.test(normalized)) {
+    emotion = "anxious";
+    intensity = 4;
+  } else if (/(angry|annoyed|frustrated|mad|rage)/.test(normalized)) {
+    emotion = "angry";
+    intensity = 4;
+  } else if (/(tired|exhausted|drained|sleepy|burnt out)/.test(normalized)) {
+    emotion = "tired";
+    intensity = 3;
+  } else if (/(happy|joy|excited|glad|love|hopeful|great)/.test(normalized)) {
+    emotion = "joyful";
+    intensity = 3;
+  } else if (/(calm|peaceful|steady|relieved|okay|fine)/.test(normalized)) {
+    emotion = "calm";
+    intensity = 2;
+  }
+
+  if (/!/.test(text || "")) intensity = Math.min(5, intensity + 1);
+  if ((text || "").trim().split(/\s+/).length > 12) intensity = Math.min(5, intensity + 1);
+
+  return {
+    emotion,
+    intensity,
+    message: "Thank you for checking in with yourself today.",
+  };
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -13,23 +48,24 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "Server is missing OPENAI_API_KEY" });
+    const fallback = getFallbackAnalysis(text);
+    res.status(200).json(fallback);
     return;
   }
 
   try {
-    const openaiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+    const openrouterRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://mood-journal-app-sxaq.vercel.app",
+        "X-Title": "Mood Journal",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.4,
-        response_format: { type: "json_object" },
+        model: "openai/gpt-4.1-mini",
         messages: [
           {
             role: "system",
@@ -44,13 +80,14 @@ export default async function handler(req, res) {
       }),
     });
 
-    if (!openaiRes.ok) {
-      const errBody = await openaiRes.text();
-      res.status(502).json({ error: "OpenAI request failed", detail: errBody });
+    if (!openrouterRes.ok) {
+      const errBody = await openrouterRes.text();
+      const fallback = getFallbackAnalysis(text);
+      res.status(200).json(fallback);
       return;
     }
 
-    const data = await openaiRes.json();
+    const data = await openrouterRes.json();
     const raw = data.choices?.[0]?.message?.content || "{}";
     const parsed = JSON.parse(raw);
 
@@ -60,6 +97,7 @@ export default async function handler(req, res) {
       message: parsed.message || "Thank you for checking in with yourself today.",
     });
   } catch (err) {
-    res.status(500).json({ error: "Analysis failed", detail: String(err) });
+    const fallback = getFallbackAnalysis(text);
+    res.status(200).json(fallback);
   }
 }
